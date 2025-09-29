@@ -1,0 +1,125 @@
+name: Linux Desktop via CRD
+
+on:
+  workflow_dispatch:
+    inputs:
+      gh_crd_auth:
+        description: "Auth Code CRD (dari remotedesktop.google.com/headless)"
+        required: true
+      gh_pc_name:
+        description: "Nama PC (tampil di aplikasi CRD)"
+        required: true
+        default: "RDP-Ubuntu"
+      gh_pin_crd:
+        description: "PIN (minimal 6 digit angka)"
+        required: true
+        default: "123321"
+      runtime_minutes:
+        description: "Durasi runtime dalam menit (maks 360; default 355)"
+        default: "355"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  crd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 370
+    steps:
+      - name: 🔧 Memproses input
+        id: cfg
+        run: |
+          runtime=${{ inputs.runtime_minutes }}
+          # Validasi runtime, harus berupa angka antara 6 dan 360
+          if ! [[ "$runtime" =~ ^[0-9]+$ ]] || [ "$runtime" -gt 360 ] || [ "$runtime" -lt 6 ]; then
+            echo "Runtime tidak valid. Menggunakan default 355 menit."
+            runtime=355
+          fi
+          
+          echo "code=${{ inputs.gh_crd_auth }}" >> $GITHUB_OUTPUT
+          echo "pcname=${{ inputs.gh_pc_name }}" >> $GITHUB_OUTPUT
+          echo "pin=${{ inputs.gh_pin_crd }}" >> $GITHUB_OUTPUT
+          echo "runtime=$runtime" >> $GITHUB_OUTPUT
+          echo "Runtime yang akan digunakan: $runtime menit"
+
+      - name: ♻ Menggunakan Cache untuk mempercepat instalasi
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt
+          key: ${{ runner.os }}-apt-cache-${{ hashFiles('.github/workflows/*.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-apt-cache-
+
+      - name: 📥 Instal Lingkungan Desktop dan Chrome Remote Desktop
+        run: |
+          echo "Memulai instalasi..."
+          # Update package list
+          sudo apt-get update
+          
+          # Instal Lingkungan Desktop minimalis namun fungsional
+          sudo DEBIAN_FRONTEND=noninteractive \
+            apt-get install --assume-yes --no-install-recommends xfce4 xfce4-terminal thunar desktop-base dbus-x11 xscreensaver
+          
+          # Download CRD Host
+          wget https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
+          
+          # Instal CRD Host. Tambahkan "|| true" agar workflow tidak berhenti jika ada error dependensi
+          sudo dpkg --install chrome-remote-desktop_current_amd64.deb || true
+          
+          # Perbaiki dependensi yang rusak/hilang.
+          sudo apt-get install --assume-yes -f
+          
+          echo "Instalasi dasar selesai."
+
+      - name: 🚀 Konfigurasi Chrome Remote Desktop
+        run: |
+          pin="${{ steps.cfg.outputs.pin }}"
+          
+          # Validasi PIN
+          if ! [[ "$pin" =~ ^[0-9]{6,}$ ]]; then
+            echo "::error::PIN harus terdiri dari minimal 6 digit angka."
+            exit 1
+          fi
+          
+          # Setup CRD host
+          DISPLAY= /opt/google/chrome-remote-desktop/start-host \
+            --code="${{ steps.cfg.outputs.code }}" \
+            --redirect-url="https://remotedesktop.google.com/_/oauthredirect" \
+            --name="${{ steps.cfg.outputs.pcname }}" \
+            --pin="$pin"
+
+      # ====================================================================
+      # PERUBAHAN: Menambahkan step baru untuk instalasi XDM dan FFmpeg
+      # ====================================================================
+      - name: 📥 Instal Aplikasi Tambahan (XDM & FFmpeg)
+        run: |
+          echo "=== Menginstal Xtreme Download Manager (XDM) ==="
+          # Menggunakan -O untuk menyimpan file dengan nama yang sama di direktori saat ini
+          wget -O xdm-setup-7.2.11.tar.xz https://github.com/subhra74/xdm/releases/download/7.2.11/xdm-setup-7.2.11.tar.xz
+          tar -xvf xdm-setup-7.2.11.tar.xz
+          # Menjalankan install script sebagai root
+          sudo ./install.sh
+          
+          echo "=== Menginstal FFmpeg ==="
+          sudo apt-get install --assume-yes ffmpeg
+          
+          echo "Instalasi aplikasi tambahan selesai."
+
+      - name: ⏳ Menjaga sesi tetap aktif
+        run: |
+          runtime_mins=${{ steps.cfg.outputs.runtime }}
+          end_time=$((SECONDS + runtime_mins * 60))
+          
+          echo "Sesi CRD aktif. Akan berjalan selama $runtime_mins menit."
+          
+          while [ $SECONDS -lt $end_time ]; do
+            remaining_mins=$(( (end_time - SECONDS) / 60 ))
+            echo "Sesi CRD aktif... Sisa waktu: $remaining_mins menit."
+            sleep 60
+          done
+          
+          echo "Waktu habis. Menghentikan sesi."
