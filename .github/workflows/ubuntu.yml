@@ -95,7 +95,7 @@ jobs:
       # ====================================================================
       # PERUBAHAN: Menambahkan step baru untuk instalasi XDM dan FFmpeg
       # ====================================================================
-      - name: 📥 Instal Aplikasi Tambahan (XDM & FFmpeg)
+      - name: 📥 Instal Aplikasi Tambahan (XDM & FFmpeg & MEGA & YT-DLP)
         run: |
           echo "=== Menginstal Xtreme Download Manager (XDM) ==="
           # Menggunakan -O untuk menyimpan file dengan nama yang sama di direktori saat ini
@@ -106,6 +106,14 @@ jobs:
           
           echo "=== Menginstal FFmpeg ==="
           sudo apt-get install --assume-yes ffmpeg
+
+          sudo apt update
+
+          sudo apt install -y python3 python3-pip
+
+          python3 -m pip install -U yt-dlp
+
+          wget https://mega.nz/linux/repo/xUbuntu_25.10/amd64/megasync-xUbuntu_25.10_amd64.deb && sudo apt install "$PWD/megasync-xUbuntu_25.10_amd64.deb"
           
           echo "Instalasi aplikasi tambahan selesai."
 
