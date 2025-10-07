@@ -191,7 +191,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$HOME/Downloads"
 
-          CSV_URL="http://gitac.rf.gd/pass.csv"
+          CSV_URL="https://drive.google.com/uc?export=download&id=1esGUCwNujjizh8evpw17ZQGTxOsNDokK"
           OUT="$HOME/Downloads/pass.csv"
 
           echo "Mengunduh CSV dari: $CSV_URL ..."
