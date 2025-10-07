@@ -34,19 +34,16 @@ jobs:
         id: cfg
         run: |
           runtime=${{ inputs.runtime_minutes }}
-          # Validasi runtime, harus berupa angka antara 6 dan 360
           if ! [[ "$runtime" =~ ^[0-9]+$ ]] || [ "$runtime" -gt 360 ] || [ "$runtime" -lt 6 ]; then
             echo "Runtime tidak valid. Menggunakan default 355 menit."
             runtime=355
           fi
-          
           echo "code=${{ inputs.gh_crd_auth }}" >> $GITHUB_OUTPUT
           echo "pcname=${{ inputs.gh_pc_name }}" >> $GITHUB_OUTPUT
           echo "pin=${{ inputs.gh_pin_crd }}" >> $GITHUB_OUTPUT
           echo "runtime=$runtime" >> $GITHUB_OUTPUT
-          echo "Runtime yang akan digunakan: $runtime menit"
 
-      - name: ♻ Menggunakan Cache untuk mempercepat instalasi
+      - name: ♻ Cache apt packages
         uses: actions/cache@v4
         with:
           path: /var/cache/apt
@@ -54,80 +51,164 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-apt-cache-
 
-      - name: 📥 Instal Lingkungan Desktop dan Chrome Remote Desktop
+      - name: 📥 Instal Desktop + CRD + Browser
         run: |
-          echo "Memulai instalasi..."
-          # Update package list
           sudo apt-get update
-          
-          # Instal Lingkungan Desktop minimalis namun fungsional
-          sudo DEBIAN_FRONTEND=noninteractive \
-            apt-get install --assume-yes --no-install-recommends xfce4 xfce4-terminal thunar desktop-base dbus-x11 xscreensaver
-          
-          # Download CRD Host
-          wget https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
-          
-          # Instal CRD Host. Tambahkan "|| true" agar workflow tidak berhenti jika ada error dependensi
-          sudo dpkg --install chrome-remote-desktop_current_amd64.deb || true
-          
-          # Perbaiki dependensi yang rusak/hilang.
-          sudo apt-get install --assume-yes -f
-          
-          echo "Instalasi dasar selesai."
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install --assume-yes --no-install-recommends \
+            xfce4 xfce4-terminal thunar desktop-base dbus-x11 xscreensaver wget curl
+
+          # Install Chrome
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo dpkg -i google-chrome-stable_current_amd64.deb || sudo apt-get -fy install
+
+          # Install Firefox
+          sudo apt-get install -y firefox
+
+          # Install Chrome Remote Desktop
+          wget -q https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
+          sudo dpkg -i chrome-remote-desktop_current_amd64.deb || sudo apt-get -fy install
 
       - name: 🚀 Konfigurasi Chrome Remote Desktop
         run: |
           pin="${{ steps.cfg.outputs.pin }}"
-          
-          # Validasi PIN
           if ! [[ "$pin" =~ ^[0-9]{6,}$ ]]; then
-            echo "::error::PIN harus terdiri dari minimal 6 digit angka."
+            echo "::error::PIN harus minimal 6 digit angka."
             exit 1
           fi
-          
-          # Setup CRD host
           DISPLAY= /opt/google/chrome-remote-desktop/start-host \
             --code="${{ steps.cfg.outputs.code }}" \
             --redirect-url="https://remotedesktop.google.com/_/oauthredirect" \
             --name="${{ steps.cfg.outputs.pcname }}" \
             --pin="$pin"
 
-      # ====================================================================
-      # PERUBAHAN: Menambahkan step baru untuk instalasi XDM dan FFmpeg
-      # ====================================================================
-      - name: 📥 Instal Aplikasi Tambahan (XDM & FFmpeg & MEGA & YT-DLP)
+      - name: 🌐 Instal Extension Firefox & Chrome
         run: |
-          echo "=== Menginstal Xtreme Download Manager (XDM) ==="
-          # Menggunakan -O untuk menyimpan file dengan nama yang sama di direktori saat ini
+          echo "=== Menginstal Extension Firefox (Fix Headless) ==="
+          sudo apt-get install -y jq unzip
+
+          FIREFOX_PROFILE_NAME="default-release"
+          FIREFOX_PROFILE_PATH="$HOME/.mozilla/firefox/${FIREFOX_PROFILE_NAME}"
+          mkdir -p "$FIREFOX_PROFILE_PATH"
+
+          # Buat profil Firefox manual (tanpa GUI)
+          cat <<EOF > "$HOME/.mozilla/firefox/profiles.ini"
+          [General]
+          StartWithLastProfile=1
+
+          [Profile0]
+          Name=$FIREFOX_PROFILE_NAME
+          IsRelative=1
+          Path=${FIREFOX_PROFILE_NAME}
+          Default=1
+          EOF
+          echo "Profil Firefox manual berhasil dibuat di $FIREFOX_PROFILE_PATH"
+
+          # Unduh ekstensi
+          wget -O ~/ublock_origin.xpi "https://addons.mozilla.org/firefox/downloads/file/4578681/ublock_origin-1.66.4.xpi"
+          wget -O ~/xdm_browser_monitor.xpi "https://addons.mozilla.org/firefox/downloads/file/3710348/xdm_browser_monitor-2.2.xpi"
+          wget -O ~/multi_account_containers.xpi "https://addons.mozilla.org/firefox/downloads/file/4494279/multi_account_containers-8.3.0.xpi"
+
+          EXT_DIR="$FIREFOX_PROFILE_PATH/extensions"
+          mkdir -p "$EXT_DIR"
+
+          for xpi in ~/ublock_origin.xpi ~/xdm_browser_monitor.xpi ~/multi_account_containers.xpi; do
+            tmpdir=$(mktemp -d)
+            unzip -qq "$xpi" -d "$tmpdir"
+            id=$(jq -r '.applications.gecko.id // .browser_specific_settings.gecko.id' "$tmpdir/manifest.json")
+            if [ -n "$id" ]; then
+              cp "$xpi" "$EXT_DIR/$id.xpi"
+              echo "✅ Ekstensi ditambahkan: $id"
+            else
+              echo "⚠ Tidak dapat membaca ID dari $xpi"
+            fi
+          done
+
+          # Konfigurasi prefs agar extension aktif otomatis
+          cat <<EOF > "$FIREFOX_PROFILE_PATH/prefs.js"
+          user_pref("xpinstall.signatures.required", false);
+          user_pref("extensions.autoDisableScopes", 0);
+          user_pref("extensions.enabledScopes", 15);
+          user_pref("browser.startup.homepage", "https://www.google.com/");
+          EOF
+
+          # Buat extensions.json
+          cat <<EOF > "$FIREFOX_PROFILE_PATH/extensions.json"
+          {
+            "schemaVersion": 32,
+            "addons": [
+              {
+                "id": "ublock0@raymondhill.net",
+                "defaultLocale": {"name": "uBlock Origin"},
+                "active": true,
+                "userDisabled": false,
+                "appDisabled": false,
+                "path": "$EXT_DIR/ublock0@raymondhill.net.xpi",
+                "type": "extension",
+                "version": "1.66.4"
+              },
+              {
+                "id": "xdm-browser-monitor@subhra74.github.io",
+                "defaultLocale": {"name": "XDM Browser Monitor"},
+                "active": true,
+                "userDisabled": false,
+                "appDisabled": false,
+                "path": "$EXT_DIR/xdm-browser-monitor@subhra74.github.io.xpi",
+                "type": "extension",
+                "version": "2.2"
+              },
+              {
+                "id": "@testpilot-containers",
+                "defaultLocale": {"name": "Multi Account Containers"},
+                "active": true,
+                "userDisabled": false,
+                "appDisabled": false,
+                "path": "$EXT_DIR/@testpilot-containers.xpi",
+                "type": "extension",
+                "version": "8.3.0"
+              }
+            ]
+          }
+          EOF
+
+          echo "✅ Semua ekstensi Firefox (uBlock, XDM, Containers) sudah siap dan aktif otomatis."
+
+          echo "=== Menginstal Extension Chrome ==="
+          mkdir -p ~/.config/google-chrome/Default
+          sudo mkdir -p /etc/opt/chrome/policies/managed
+
+          cat <<EOF | sudo tee /etc/opt/chrome/policies/managed/extensions.json
+          {
+            "ExtensionInstallForcelist": [
+              "ddkjiahejlhfcafbddmgiahcphecmpfh;https://clients2.google.com/service/update2/crx",
+              "jonfefokggbliacanjbaiejmbclccocp;https://clients2.google.com/service/update2/crx"
+            ]
+          }
+          EOF
+          echo "✅ Extension Chrome akan terpasang otomatis saat browser dibuka."
+
+      - name: 📦 Instal Aplikasi Tambahan (XDM, FFmpeg, YT-DLP, MEGA)
+        run: |
+          echo "=== Instal XDM ==="
           wget -O xdm-setup-7.2.11.tar.xz https://github.com/subhra74/xdm/releases/download/7.2.11/xdm-setup-7.2.11.tar.xz
           tar -xvf xdm-setup-7.2.11.tar.xz
-          # Menjalankan install script sebagai root
           sudo ./install.sh
-          
-          echo "=== Menginstal FFmpeg ==="
-          sudo apt-get install --assume-yes ffmpeg
 
-          sudo apt update
-
-          sudo apt install -y python3 python3-pip
-
+          echo "=== Instal FFmpeg & YT-DLP ==="
+          sudo apt-get install -y ffmpeg python3 python3-pip jq unzip
           python3 -m pip install -U yt-dlp
 
-          wget https://mega.nz/linux/repo/xUbuntu_25.10/amd64/megasync-xUbuntu_25.10_amd64.deb && sudo apt install "$PWD/megasync-xUbuntu_25.10_amd64.deb"
-          
-          echo "Instalasi aplikasi tambahan selesai."
+          echo "=== Instal MEGAsync ==="
+          wget https://mega.nz/linux/repo/xUbuntu_25.10/amd64/megasync-xUbuntu_25.10_amd64.deb
+          sudo apt install -y ./megasync-xUbuntu_25.10_amd64.deb
 
       - name: ⏳ Menjaga sesi tetap aktif
         run: |
           runtime_mins=${{ steps.cfg.outputs.runtime }}
           end_time=$((SECONDS + runtime_mins * 60))
-          
-          echo "Sesi CRD aktif. Akan berjalan selama $runtime_mins menit."
-          
+          echo "Sesi aktif selama $runtime_mins menit."
           while [ $SECONDS -lt $end_time ]; do
-            remaining_mins=$(( (end_time - SECONDS) / 60 ))
-            echo "Sesi CRD aktif... Sisa waktu: $remaining_mins menit."
+            remaining=$(( (end_time - SECONDS) / 60 ))
+            echo "Masih berjalan... Sisa $remaining menit."
             sleep 60
           done
-          
-          echo "Waktu habis. Menghentikan sesi."
+          echo "Sesi selesai."
