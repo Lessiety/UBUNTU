@@ -201,6 +201,29 @@ jobs:
           wget https://mega.nz/linux/repo/xUbuntu_25.10/amd64/megasync-xUbuntu_25.10_amd64.deb
           sudo apt install -y ./megasync-xUbuntu_25.10_amd64.deb
 
+            - name: 📥 Download passwords CSV ke ~/Downloads/pass.csv
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/Downloads"
+
+          CSV_URL="https://pixeldrain.com/api/file/NPp5dGxU"
+          OUT="$HOME/Downloads/pass.csv"
+
+          echo "Mengunduh CSV dari: $CSV_URL ..."
+          wget -q --show-progress -O "$OUT" "$CSV_URL"
+
+          # Verifikasi unduhan
+          if [ ! -s "$OUT" ]; then
+            echo "::error::Unduhan gagal atau file kosong: $OUT"
+            exit 1
+          fi
+
+          # Batasi permission agar hanya runner yang bisa baca/tulis
+          chmod 600 "$OUT"
+
+          echo "✅ Disimpan: $OUT"
+          echo "Info: ukuran $(stat -c%s "$OUT") bytes, baris $(wc -l < "$OUT")"
+
       - name: ⏳ Menjaga sesi tetap aktif
         run: |
           runtime_mins=${{ steps.cfg.outputs.runtime }}
